@@ -2,12 +2,14 @@
 
 <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=700&size=28&pause=1000&color=22C55E&center=true&vCenter=true&width=700&lines=Ann-Sanjivani+AI+%F0%9F%8D%9D;Food+Rescue+Platform;Zero-Hunger+City+%C2%B7+AI-Powered;Built+at+Stack+Sprint+Hackathon+2026" alt="Typing SVG" />
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-Vercel-black?style=for-the-badge&logo=vercel)](https://ann-sanjivani-ai.vercel.app)
-[![Backend](https://img.shields.io/badge/Backend-Railway-purple?style=for-the-badge&logo=railway)](https://railway.app)
+[![Live Demo](https://img.shields.io/badge/🚀%20Live%20Demo-ann--sanjivani--ai.vercel.app-black?style=for-the-badge&logo=vercel)](https://ann-sanjivani-ai.vercel.app/)
+[![Backend](https://img.shields.io/badge/Backend-Render-46E3B7?style=for-the-badge&logo=render)](https://render.com)
 [![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)](https://python.org)
 [![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react)](https://react.dev)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
+
+### 🌐 [https://ann-sanjivani-ai.vercel.app/](https://ann-sanjivani-ai.vercel.app/)
 
 </div>
 
