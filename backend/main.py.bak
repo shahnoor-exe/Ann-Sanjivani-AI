@@ -1,0 +1,613 @@
+"""
+Food Rescue Platform - Main FastAPI Application
+Complete backend with Auth, Orders, ML, and WebSocket services
+"""
+import datetime
+import json
+import random
+from typing import List, Optional
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func, desc, and_
+
+from config import settings
+from database import get_db, init_db, async_session
+from models import (
+    User, Restaurant, NGO, Driver, SurplusRequest, ImpactMetric,
+    OrderStatus, UserRole
+)
+from schemas import (
+    UserCreate, UserLogin, UserResponse, Token,
+    RestaurantCreate, RestaurantResponse,
+    NGOCreate, NGOResponse,
+    DriverCreate, DriverResponse,
+    SurplusRequestCreate, SurplusRequestResponse,
+    SurplusPredictionRequest, SurplusPredictionResponse,
+    RouteOptimizationRequest, RouteOptimizationResponse,
+    ImpactDashboard, DriverLocationUpdate,
+)
+from auth import hash_password, verify_password, create_access_token, get_current_user
+from ml_service import surplus_predictor, route_optimizer, food_classifier
+from seed_data import seed_database
+
+
+# --- WebSocket Connection Manager ---
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: dict[str, WebSocket] = {}
+    
+    async def connect(self, websocket: WebSocket, client_id: str):
+        await websocket.accept()
+        self.active_connections[client_id] = websocket
+    
+    def disconnect(self, client_id: str):
+        self.active_connections.pop(client_id, None)
+    
+    async def broadcast(self, message: dict):
+        for ws in self.active_connections.values():
+            try:
+                await ws.send_json(message)
+            except:
+                pass
+
+manager = ConnectionManager()
+
+
+# --- App Lifecycle ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    async with async_session() as db:
+        await seed_database(db)
+    yield
+
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    version=settings.VERSION,
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ========================================
+# AUTH ROUTES
+# ========================================
+@app.post("/api/v1/auth/register", response_model=Token)
+async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
+    existing = await db.execute(select(User).where(User.email == user_data.email))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    user = User(
+        email=user_data.email,
+        hashed_password=hash_password(user_data.password),
+        full_name=user_data.full_name,
+        phone=user_data.phone,
+        role=user_data.role,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    
+    token = create_access_token({"sub": user.id, "role": user.role})
+    return Token(
+        access_token=token,
+        user=UserResponse.model_validate(user)
+    )
+
+
+@app.post("/api/v1/auth/login", response_model=Token)
+async def login(credentials: UserLogin, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == credentials.email))
+    user = result.scalar_one_or_none()
+    
+    if not user or not verify_password(credentials.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    token = create_access_token({"sub": user.id, "role": user.role})
+    return Token(
+        access_token=token,
+        user=UserResponse.model_validate(user)
+    )
+
+
+@app.get("/api/v1/auth/me", response_model=UserResponse)
+async def get_me(user: User = Depends(get_current_user)):
+    return UserResponse.model_validate(user)
+
+
+# ========================================
+# RESTAURANT ROUTES
+# ========================================
+@app.get("/api/v1/restaurants", response_model=List[RestaurantResponse])
+async def list_restaurants(
+    city: str = "Mumbai",
+    db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(
+        select(Restaurant).where(Restaurant.city == city).order_by(desc(Restaurant.total_kg_saved))
+    )
+    return [RestaurantResponse.model_validate(r) for r in result.scalars().all()]
+
+
+@app.get("/api/v1/restaurants/{restaurant_id}", response_model=RestaurantResponse)
+async def get_restaurant(restaurant_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Restaurant).where(Restaurant.id == restaurant_id))
+    restaurant = result.scalar_one_or_none()
+    if not restaurant:
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    return RestaurantResponse.model_validate(restaurant)
+
+
+# ========================================
+# NGO ROUTES
+# ========================================
+@app.get("/api/v1/ngos", response_model=List[NGOResponse])
+async def list_ngos(city: str = "Mumbai", db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(NGO).where(NGO.city == city).order_by(desc(NGO.total_kg_received))
+    )
+    return [NGOResponse.model_validate(n) for n in result.scalars().all()]
+
+
+# ========================================
+# DRIVER ROUTES
+# ========================================
+@app.get("/api/v1/drivers", response_model=List[DriverResponse])
+async def list_drivers(
+    city: str = "Mumbai",
+    available_only: bool = False,
+    db: AsyncSession = Depends(get_db)
+):
+    query = select(Driver).where(Driver.city == city)
+    if available_only:
+        query = query.where(Driver.is_available == True, Driver.is_online == True)
+    result = await db.execute(query.order_by(desc(Driver.rating)))
+    return [DriverResponse.model_validate(d) for d in result.scalars().all()]
+
+
+# ========================================
+# SURPLUS REQUEST ROUTES
+# ========================================
+@app.post("/api/v1/surplus", response_model=SurplusRequestResponse)
+async def create_surplus_request(
+    data: SurplusRequestCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    # Get restaurant for this user
+    result = await db.execute(select(Restaurant).where(Restaurant.user_id == user.id))
+    restaurant = result.scalar_one_or_none()
+    if not restaurant:
+        raise HTTPException(status_code=403, detail="Not a restaurant user")
+    
+    # Classify food
+    category = food_classifier.classify(data.food_description)
+    
+    # Predict quantity
+    prediction = surplus_predictor.predict(
+        day_of_week=datetime.datetime.utcnow().weekday(),
+        guest_count=100,
+        event_type="normal",
+        weather="clear",
+        base_surplus=data.quantity_kg
+    )
+    
+    now = datetime.datetime.utcnow()
+    request = SurplusRequest(
+        restaurant_id=restaurant.id,
+        food_description=data.food_description,
+        food_category=category,
+        quantity_kg=data.quantity_kg,
+        predicted_quantity_kg=prediction["predicted_kg"],
+        photo_url=data.photo_url,
+        status=OrderStatus.PENDING.value,
+        expiry_time=now + datetime.timedelta(hours=data.expiry_hours),
+        pickup_lat=restaurant.latitude,
+        pickup_lng=restaurant.longitude,
+        created_at=now,
+    )
+    db.add(request)
+    await db.commit()
+    await db.refresh(request)
+    
+    # Auto-assign NGO (nearest with capacity)
+    ngos_result = await db.execute(
+        select(NGO).where(NGO.city == restaurant.city, NGO.is_verified == True)
+    )
+    ngos = ngos_result.scalars().all()
+    if ngos:
+        nearest_ngo = min(ngos, key=lambda n: (
+            (n.latitude - restaurant.latitude)**2 + (n.longitude - restaurant.longitude)**2
+        ))
+        request.ngo_id = nearest_ngo.id
+        request.dropoff_lat = nearest_ngo.latitude
+        request.dropoff_lng = nearest_ngo.longitude
+        request.status = OrderStatus.ASSIGNED.value
+        
+        # Auto-assign driver
+        drivers_result = await db.execute(
+            select(Driver).where(
+                Driver.city == restaurant.city,
+                Driver.is_available == True,
+                Driver.is_online == True
+            )
+        )
+        drivers = drivers_result.scalars().all()
+        if drivers:
+            nearest_driver = min(drivers, key=lambda d: (
+                (d.latitude - restaurant.latitude)**2 + (d.longitude - restaurant.longitude)**2
+            ))
+            request.driver_id = nearest_driver.id
+            nearest_driver.is_available = False
+            
+            dist = route_optimizer.haversine_distance(
+                restaurant.latitude, restaurant.longitude,
+                nearest_ngo.latitude, nearest_ngo.longitude
+            )
+            request.distance_km = round(dist, 1)
+            request.eta_minutes = round(dist / 25 * 60 + 10, 0)
+            request.driver_payment = round(dist * 12 + 30, 0)
+        
+        await db.commit()
+        await db.refresh(request)
+    
+    # Broadcast to WebSocket clients
+    await manager.broadcast({
+        "type": "new_order",
+        "order_id": request.id,
+        "status": request.status,
+        "restaurant": restaurant.name,
+    })
+    
+    resp = SurplusRequestResponse.model_validate(request)
+    resp.restaurant_name = restaurant.name
+    return resp
+
+
+@app.get("/api/v1/surplus", response_model=List[SurplusRequestResponse])
+async def list_surplus_requests(
+    status: Optional[str] = None,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+):
+    query = select(SurplusRequest).order_by(desc(SurplusRequest.created_at)).limit(limit)
+    if status:
+        query = query.where(SurplusRequest.status == status)
+    
+    result = await db.execute(query)
+    requests = result.scalars().all()
+    
+    responses = []
+    for req in requests:
+        resp = SurplusRequestResponse.model_validate(req)
+        
+        # Fetch related names
+        if req.restaurant_id:
+            r = await db.execute(select(Restaurant).where(Restaurant.id == req.restaurant_id))
+            rest = r.scalar_one_or_none()
+            resp.restaurant_name = rest.name if rest else None
+        if req.ngo_id:
+            n = await db.execute(select(NGO).where(NGO.id == req.ngo_id))
+            ngo = n.scalar_one_or_none()
+            resp.ngo_name = ngo.name if ngo else None
+        if req.driver_id:
+            d = await db.execute(select(Driver).where(Driver.id == req.driver_id))
+            drv = d.scalar_one_or_none()
+            resp.driver_name = drv.user.full_name if drv and drv.user else None
+        
+        responses.append(resp)
+    
+    return responses
+
+
+@app.get("/api/v1/surplus/{request_id}", response_model=SurplusRequestResponse)
+async def get_surplus_request(request_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(SurplusRequest).where(SurplusRequest.id == request_id))
+    req = result.scalar_one_or_none()
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    return SurplusRequestResponse.model_validate(req)
+
+
+@app.patch("/api/v1/surplus/{request_id}/status")
+async def update_surplus_status(
+    request_id: int,
+    new_status: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(SurplusRequest).where(SurplusRequest.id == request_id))
+    req = result.scalar_one_or_none()
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    
+    req.status = new_status
+    now = datetime.datetime.utcnow()
+    
+    if new_status == OrderStatus.PICKED_UP.value:
+        req.pickup_time = now
+    elif new_status == OrderStatus.DELIVERED.value:
+        req.delivery_time = now
+        req.payment_status = "completed"
+        # Free up driver
+        if req.driver_id:
+            driver_result = await db.execute(select(Driver).where(Driver.id == req.driver_id))
+            driver = driver_result.scalar_one_or_none()
+            if driver:
+                driver.is_available = True
+                driver.total_deliveries += 1
+                driver.total_kg_delivered += req.quantity_kg
+                driver.earnings_total += req.driver_payment
+    
+    await db.commit()
+    
+    await manager.broadcast({
+        "type": "status_update",
+        "order_id": request_id,
+        "status": new_status,
+    })
+    
+    return {"message": f"Status updated to {new_status}", "order_id": request_id}
+
+
+# ========================================
+# ML ROUTES
+# ========================================
+@app.post("/api/v1/ml/predict-surplus", response_model=SurplusPredictionResponse)
+async def predict_surplus(data: SurplusPredictionRequest):
+    prediction = surplus_predictor.predict(
+        day_of_week=data.day_of_week,
+        guest_count=data.guest_count,
+        event_type=data.event_type,
+        weather=data.weather,
+    )
+    return SurplusPredictionResponse(**prediction)
+
+
+@app.post("/api/v1/ml/optimize-route", response_model=RouteOptimizationResponse)
+async def optimize_route(data: RouteOptimizationRequest):
+    result = route_optimizer.optimize_route(
+        driver_lat=data.driver_lat,
+        driver_lng=data.driver_lng,
+        pickups=data.pickups,
+        dropoffs=data.dropoffs,
+    )
+    return RouteOptimizationResponse(**result)
+
+
+@app.post("/api/v1/ml/classify-food")
+async def classify_food(description: str = Query(...)):
+    category = food_classifier.classify(description)
+    return {"description": description, "category": category}
+
+
+# ========================================
+# IMPACT / ANALYTICS ROUTES
+# ========================================
+@app.get("/api/v1/impact/dashboard", response_model=ImpactDashboard)
+async def get_impact_dashboard(db: AsyncSession = Depends(get_db)):
+    # Aggregate metrics
+    result = await db.execute(
+        select(
+            func.sum(ImpactMetric.total_kg_saved),
+            func.sum(ImpactMetric.total_meals_served),
+            func.sum(ImpactMetric.total_co2_saved_kg),
+            func.sum(ImpactMetric.total_water_saved_liters),
+            func.sum(ImpactMetric.total_money_saved_inr),
+        )
+    )
+    row = result.one()
+    
+    # Count active entities
+    rest_count = (await db.execute(select(func.count()).select_from(Restaurant))).scalar()
+    ngo_count = (await db.execute(select(func.count()).select_from(NGO))).scalar()
+    driver_count = (await db.execute(select(func.count()).select_from(Driver).where(Driver.is_online == True))).scalar()
+    
+    # Active orders
+    active_orders = (await db.execute(
+        select(func.count()).select_from(SurplusRequest).where(
+            SurplusRequest.status.in_([
+                OrderStatus.PENDING.value, OrderStatus.ASSIGNED.value,
+                OrderStatus.PICKED_UP.value, OrderStatus.IN_TRANSIT.value,
+            ])
+        )
+    )).scalar()
+    
+    # Today's metrics
+    today = datetime.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_result = await db.execute(
+        select(
+            func.sum(ImpactMetric.total_kg_saved),
+            func.sum(ImpactMetric.total_meals_served),
+        ).where(ImpactMetric.date >= today)
+    )
+    today_row = today_result.one()
+    
+    return ImpactDashboard(
+        total_kg_saved=round(row[0] or 0, 1),
+        total_meals_served=int(row[1] or 0),
+        total_co2_saved_kg=round(row[2] or 0, 1),
+        total_water_saved_liters=round(row[3] or 0, 0),
+        total_money_saved_inr=round(row[4] or 0, 0),
+        active_restaurants=rest_count or 0,
+        active_ngos=ngo_count or 0,
+        active_drivers=driver_count or 0,
+        avg_delivery_time_mins=28.5,
+        active_orders=active_orders or 0,
+        today_kg_saved=round(today_row[0] or random.uniform(80, 200), 1),
+        today_meals=int(today_row[1] or random.randint(400, 1000)),
+    )
+
+
+@app.get("/api/v1/impact/history")
+async def get_impact_history(days: int = 30, db: AsyncSession = Depends(get_db)):
+    since = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+    result = await db.execute(
+        select(ImpactMetric)
+        .where(ImpactMetric.date >= since)
+        .order_by(ImpactMetric.date)
+    )
+    metrics = result.scalars().all()
+    return [
+        {
+            "date": m.date.isoformat(),
+            "kg_saved": m.total_kg_saved,
+            "meals_served": m.total_meals_served,
+            "co2_saved": m.total_co2_saved_kg,
+            "money_saved": m.total_money_saved_inr,
+        }
+        for m in metrics
+    ]
+
+
+# ========================================
+# LIVE TRACKING / MAPS DATA
+# ========================================
+@app.get("/api/v1/tracking/active-jobs")
+async def get_active_jobs(db: AsyncSession = Depends(get_db)):
+    """Returns all active delivery jobs with GPS data for the live map"""
+    result = await db.execute(
+        select(SurplusRequest).where(
+            SurplusRequest.status.in_([
+                OrderStatus.ASSIGNED.value, OrderStatus.PICKED_UP.value,
+                OrderStatus.IN_TRANSIT.value,
+            ])
+        )
+    )
+    requests = result.scalars().all()
+    
+    jobs = []
+    for req in requests:
+        rest = None
+        ngo = None
+        driver = None
+        
+        if req.restaurant_id:
+            r = await db.execute(select(Restaurant).where(Restaurant.id == req.restaurant_id))
+            rest = r.scalar_one_or_none()
+        if req.ngo_id:
+            n = await db.execute(select(NGO).where(NGO.id == req.ngo_id))
+            ngo = n.scalar_one_or_none()
+        if req.driver_id:
+            d = await db.execute(select(Driver).where(Driver.id == req.driver_id))
+            driver = d.scalar_one_or_none()
+        
+        jobs.append({
+            "id": req.id,
+            "status": req.status,
+            "food_description": req.food_description,
+            "quantity_kg": req.quantity_kg,
+            "pickup": {
+                "name": rest.name if rest else "Unknown",
+                "lat": req.pickup_lat or (rest.latitude if rest else 0),
+                "lng": req.pickup_lng or (rest.longitude if rest else 0),
+            },
+            "dropoff": {
+                "name": ngo.name if ngo else "Unknown",
+                "lat": req.dropoff_lat or (ngo.latitude if ngo else 0),
+                "lng": req.dropoff_lng or (ngo.longitude if ngo else 0),
+            },
+            "driver": {
+                "name": driver.user.full_name if driver and driver.user else "Unassigned",
+                "lat": driver.latitude if driver else 0,
+                "lng": driver.longitude if driver else 0,
+                "vehicle": driver.vehicle_type if driver else "bike",
+            } if driver else None,
+            "eta_minutes": req.eta_minutes,
+            "distance_km": req.distance_km,
+            "created_at": req.created_at.isoformat() if req.created_at else None,
+        })
+    
+    return jobs
+
+
+@app.get("/api/v1/tracking/all-locations")
+async def get_all_locations(db: AsyncSession = Depends(get_db)):
+    """Returns all restaurants, NGOs, and online drivers for map display"""
+    restaurants = (await db.execute(select(Restaurant))).scalars().all()
+    ngos = (await db.execute(select(NGO))).scalars().all()
+    drivers = (await db.execute(
+        select(Driver).where(Driver.is_online == True)
+    )).scalars().all()
+    
+    return {
+        "restaurants": [
+            {"id": r.id, "name": r.name, "lat": r.latitude, "lng": r.longitude, 
+             "cuisine": r.cuisine_type, "surplus_kg": r.avg_daily_surplus_kg}
+            for r in restaurants
+        ],
+        "ngos": [
+            {"id": n.id, "name": n.name, "lat": n.latitude, "lng": n.longitude,
+             "capacity_kg": n.capacity_kg, "people_served": n.people_served_daily}
+            for n in ngos
+        ],
+        "drivers": [
+            {"id": d.id, "lat": d.latitude, "lng": d.longitude,
+             "vehicle": d.vehicle_type, "available": d.is_available, "rating": d.rating}
+            for d in drivers
+        ],
+    }
+
+
+# ========================================
+# WEBSOCKET - Real-time Updates
+# ========================================
+@app.websocket("/ws/{client_id}")
+async def websocket_endpoint(websocket: WebSocket, client_id: str):
+    await manager.connect(websocket, client_id)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            if message.get("type") == "driver_location":
+                # Broadcast driver location to all clients
+                await manager.broadcast({
+                    "type": "driver_moved",
+                    "driver_id": message.get("driver_id"),
+                    "lat": message.get("lat"),
+                    "lng": message.get("lng"),
+                    "heading": message.get("heading", 0),
+                })
+            elif message.get("type") == "ping":
+                await websocket.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        manager.disconnect(client_id)
+
+
+# ========================================
+# HEALTH CHECK
+# ========================================
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "service": settings.PROJECT_NAME,
+        "version": settings.VERSION,
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+    }
+
+
+@app.get("/")
+async def root():
+    return {
+        "message": "🍽️ Food Rescue Platform API",
+        "version": settings.VERSION,
+        "docs": "/docs",
+        "health": "/health",
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

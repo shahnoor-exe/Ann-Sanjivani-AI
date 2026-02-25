@@ -1,0 +1,165 @@
+import datetime
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, ForeignKey, Enum, Text
+from sqlalchemy.orm import relationship
+from database import Base
+import enum
+
+class UserRole(str, enum.Enum):
+    RESTAURANT = "restaurant"
+    NGO = "ngo"
+    DRIVER = "driver"
+    ADMIN = "admin"
+
+class OrderStatus(str, enum.Enum):
+    PENDING = "pending"
+    ASSIGNED = "assigned"
+    PICKED_UP = "picked_up"
+    IN_TRANSIT = "in_transit"
+    DELIVERED = "delivered"
+    CANCELLED = "cancelled"
+
+class FoodCategory(str, enum.Enum):
+    VEG = "veg"
+    NON_VEG = "non_veg"
+    MIXED = "mixed"
+    RICE = "rice"
+    BREAD = "bread"
+    CURRY = "curry"
+    SNACKS = "snacks"
+    SWEETS = "sweets"
+
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    full_name = Column(String(255), nullable=False)
+    phone = Column(String(20))
+    role = Column(String(50), nullable=False, default=UserRole.RESTAURANT)
+    is_active = Column(Boolean, default=True)
+    avatar_url = Column(String(500))
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    
+    restaurant = relationship("Restaurant", back_populates="user", uselist=False)
+    ngo = relationship("NGO", back_populates="user", uselist=False)
+    driver_profile = relationship("Driver", back_populates="user", uselist=False)
+
+class Restaurant(Base):
+    __tablename__ = "restaurants"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    name = Column(String(255), nullable=False)
+    address = Column(Text, nullable=False)
+    city = Column(String(100), nullable=False)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    cuisine_type = Column(String(100))
+    avg_daily_surplus_kg = Column(Float, default=0)
+    rating = Column(Float, default=4.5)
+    total_donations = Column(Integer, default=0)
+    total_kg_saved = Column(Float, default=0)
+    is_verified = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    user = relationship("User", back_populates="restaurant")
+    surplus_requests = relationship("SurplusRequest", back_populates="restaurant")
+
+class NGO(Base):
+    __tablename__ = "ngos"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    name = Column(String(255), nullable=False)
+    address = Column(Text, nullable=False)
+    city = Column(String(100), nullable=False)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    capacity_kg = Column(Float, default=100)
+    people_served_daily = Column(Integer, default=0)
+    rating = Column(Float, default=4.5)
+    total_received = Column(Integer, default=0)
+    total_kg_received = Column(Float, default=0)
+    is_verified = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    user = relationship("User", back_populates="ngo")
+    assigned_requests = relationship("SurplusRequest", back_populates="assigned_ngo")
+
+class Driver(Base):
+    __tablename__ = "drivers"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    vehicle_type = Column(String(50), default="bike")
+    license_number = Column(String(50))
+    city = Column(String(100), nullable=False)
+    latitude = Column(Float, default=0)
+    longitude = Column(Float, default=0)
+    is_available = Column(Boolean, default=True)
+    is_online = Column(Boolean, default=True)
+    total_deliveries = Column(Integer, default=0)
+    total_kg_delivered = Column(Float, default=0)
+    rating = Column(Float, default=4.8)
+    earnings_total = Column(Float, default=0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    user = relationship("User", back_populates="driver_profile")
+    deliveries = relationship("SurplusRequest", back_populates="assigned_driver")
+
+class SurplusRequest(Base):
+    __tablename__ = "surplus_requests"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=False)
+    ngo_id = Column(Integer, ForeignKey("ngos.id"), nullable=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=True)
+    
+    food_description = Column(Text, nullable=False)
+    food_category = Column(String(50), default=FoodCategory.MIXED)
+    quantity_kg = Column(Float, nullable=False)
+    predicted_quantity_kg = Column(Float, nullable=True)
+    photo_url = Column(String(500))
+    
+    status = Column(String(50), default=OrderStatus.PENDING)
+    pickup_time = Column(DateTime)
+    delivery_time = Column(DateTime)
+    expiry_time = Column(DateTime)
+    
+    temperature_ok = Column(Boolean, default=True)
+    quality_rating = Column(Integer, default=5)
+    
+    pickup_lat = Column(Float)
+    pickup_lng = Column(Float)
+    dropoff_lat = Column(Float)
+    dropoff_lng = Column(Float)
+    distance_km = Column(Float, default=0)
+    eta_minutes = Column(Integer, default=0)
+    
+    driver_payment = Column(Float, default=0)
+    payment_status = Column(String(50), default="pending")
+    
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    
+    restaurant = relationship("Restaurant", back_populates="surplus_requests")
+    assigned_ngo = relationship("NGO", back_populates="assigned_requests")
+    assigned_driver = relationship("Driver", back_populates="deliveries")
+
+class ImpactMetric(Base):
+    __tablename__ = "impact_metrics"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(DateTime, default=datetime.datetime.utcnow)
+    city = Column(String(100), default="Mumbai")
+    total_kg_saved = Column(Float, default=0)
+    total_meals_served = Column(Integer, default=0)
+    total_co2_saved_kg = Column(Float, default=0)
+    total_water_saved_liters = Column(Float, default=0)
+    total_money_saved_inr = Column(Float, default=0)
+    active_restaurants = Column(Integer, default=0)
+    active_ngos = Column(Integer, default=0)
+    active_drivers = Column(Integer, default=0)
+    avg_delivery_time_mins = Column(Float, default=0)

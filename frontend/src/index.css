@@ -1,0 +1,199 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background: #020617;
+    color: #f8fafc;
+    overflow-x: hidden;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0f172a;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #1e293b;
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #334155;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl shadow-xl;
+  }
+
+  .glass-card-hover {
+    @apply glass-card transition-all duration-500 hover:bg-white/10 hover:border-white/20 hover:shadow-2xl hover:shadow-green-500/10 hover:-translate-y-1;
+  }
+
+  .gradient-text {
+    @apply bg-gradient-to-r from-green-400 via-emerald-400 to-teal-400 bg-clip-text text-transparent;
+  }
+
+  .gradient-text-warm {
+    @apply bg-gradient-to-r from-orange-400 via-amber-400 to-yellow-400 bg-clip-text text-transparent;
+  }
+
+  .gradient-text-cool {
+    @apply bg-gradient-to-r from-blue-400 via-cyan-400 to-teal-400 bg-clip-text text-transparent;
+  }
+
+  .btn-primary {
+    @apply relative overflow-hidden bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold py-3 px-8 rounded-xl 
+    shadow-lg shadow-green-500/25 transition-all duration-300 
+    hover:shadow-xl hover:shadow-green-500/40 hover:scale-105 
+    active:scale-95 focus:outline-none focus:ring-2 focus:ring-green-400 focus:ring-offset-2 focus:ring-offset-slate-900;
+  }
+
+  .btn-secondary {
+    @apply relative overflow-hidden bg-white/10 backdrop-blur-sm text-white font-semibold py-3 px-8 rounded-xl 
+    border border-white/20 transition-all duration-300 
+    hover:bg-white/20 hover:border-white/30 hover:scale-105 
+    active:scale-95 focus:outline-none focus:ring-2 focus:ring-white/30;
+  }
+
+  .btn-danger {
+    @apply relative overflow-hidden bg-gradient-to-r from-red-500 to-rose-600 text-white font-semibold py-3 px-8 rounded-xl 
+    shadow-lg shadow-red-500/25 transition-all duration-300 
+    hover:shadow-xl hover:shadow-red-500/40 hover:scale-105;
+  }
+
+  .input-field {
+    @apply w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-slate-400 
+    focus:outline-none focus:ring-2 focus:ring-green-400/50 focus:border-green-400/50 
+    transition-all duration-300 backdrop-blur-sm;
+  }
+
+  .stat-card {
+    @apply glass-card p-6 relative overflow-hidden group cursor-pointer;
+  }
+
+  .stat-card::before {
+    content: '';
+    @apply absolute inset-0 bg-gradient-to-br opacity-0 group-hover:opacity-100 transition-opacity duration-500 rounded-2xl;
+  }
+
+  .page-section {
+    @apply py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto;
+  }
+
+  .section-title {
+    @apply text-4xl md:text-5xl font-bold font-display mb-6 tracking-tight;
+  }
+
+  .section-subtitle {
+    @apply text-lg md:text-xl text-slate-400 max-w-3xl mx-auto;
+  }
+
+  /* Animated background blobs */
+  .blob-green {
+    @apply absolute rounded-full bg-green-500/20 blur-3xl animate-blob;
+  }
+  .blob-blue {
+    @apply absolute rounded-full bg-blue-500/20 blur-3xl animate-blob;
+    animation-delay: 2s;
+  }
+  .blob-purple {
+    @apply absolute rounded-full bg-purple-500/20 blur-3xl animate-blob;
+    animation-delay: 4s;
+  }
+
+  /* Status badges */
+  .badge-pending {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30;
+  }
+  .badge-assigned {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30;
+  }
+  .badge-picked_up {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30;
+  }
+  .badge-in_transit {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30;
+  }
+  .badge-delivered {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-green-500/20 text-green-300 border border-green-500/30;
+  }
+  .badge-cancelled {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-red-500/20 text-red-300 border border-red-500/30;
+  }
+
+  /* Shimmer loading effect */
+  .shimmer {
+    @apply relative overflow-hidden;
+  }
+  .shimmer::after {
+    content: '';
+    @apply absolute inset-0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent);
+    @apply animate-shimmer;
+    background-size: 200% 100%;
+  }
+
+  /* Glow effects */
+  .glow-green {
+    box-shadow: 0 0 30px rgba(34, 197, 94, 0.3), 0 0 60px rgba(34, 197, 94, 0.1);
+  }
+  .glow-orange {
+    box-shadow: 0 0 30px rgba(249, 115, 22, 0.3), 0 0 60px rgba(249, 115, 22, 0.1);
+  }
+  .glow-blue {
+    box-shadow: 0 0 30px rgba(14, 165, 233, 0.3), 0 0 60px rgba(14, 165, 233, 0.1);
+  }
+
+  /* Map container */
+  .leaflet-container {
+    @apply rounded-2xl;
+    background: #0f172a !important;
+  }
+}
+
+/* Animated gradient background */
+.animated-gradient-bg {
+  background: linear-gradient(-45deg, #064e3b, #0f172a, #1e1b4b, #0c4a6e, #064e3b);
+  background-size: 400% 400%;
+  animation: gradient 15s ease infinite;
+}
+
+/* Particle background effect */
+.particles-bg {
+  position: relative;
+  overflow: hidden;
+}
+.particles-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(2px 2px at 20px 30px, rgba(34, 197, 94, 0.3), transparent),
+    radial-gradient(2px 2px at 40px 70px, rgba(14, 165, 233, 0.2), transparent),
+    radial-gradient(2px 2px at 50px 160px, rgba(139, 92, 246, 0.2), transparent),
+    radial-gradient(2px 2px at 90px 40px, rgba(249, 115, 22, 0.2), transparent),
+    radial-gradient(2px 2px at 130px 80px, rgba(34, 197, 94, 0.3), transparent),
+    radial-gradient(2px 2px at 160px 30px, rgba(14, 165, 233, 0.2), transparent);
+  background-size: 200px 200px;
+  animation: float 20s linear infinite;
+  opacity: 0.5;
+}
+
+/* Number counter animation */
+@property --num {
+  syntax: '<integer>';
+  initial-value: 0;
+  inherits: false;
+}
